@@ -439,7 +439,7 @@ class TelegramBareClient:
                 if result:
                     return result
 
-            raise ValueError('Number of retries reached 0.')
+            raise ValueError('No response after {} retries.'.format(retries))
         finally:
             if sender != self._sender:
                 sender.disconnect()  # Close temporary connections
