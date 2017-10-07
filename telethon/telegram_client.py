@@ -1,9 +1,8 @@
 import os
+import re
 from datetime import datetime, timedelta
 from functools import lru_cache
 from mimetypes import guess_type
-
-import re
 
 try:
     import socks
@@ -124,6 +123,10 @@ class TelegramClient(TelegramBareClient):
 
     def send_code_request(self, phone):
         """Sends a code request to the specified phone number"""
+        if not self.is_connected():
+            raise ValueError("You need to call client.connect() before sending "
+                             "a code request.")
+
         phone = self._parse_phone(phone)
         result = self(SendCodeRequest(phone, self.api_id, self.api_hash))
         self._phone = phone
@@ -435,7 +438,7 @@ class TelegramClient(TelegramBareClient):
             return reply_to
 
         if isinstance(reply_to, TLObject) and \
-                type(reply_to).SUBCLASS_OF_ID == 0x790009e3:
+                        type(reply_to).SUBCLASS_OF_ID == 0x790009e3:
             # hex(crc32(b'Message')) = 0x790009e3
             return reply_to.id
 
@@ -567,9 +570,9 @@ class TelegramClient(TelegramBareClient):
            some performance loss.
         """
         possible_names = []
-        if not isinstance(entity, TLObject) or type(entity).subclass_of_id in (
-                    0x2da17977, 0xc5af5d94, 0x1f4661b9, 0xd49a2697
-            ):
+        if not isinstance(entity, TLObject) or type(entity).SUBCLASS_OF_ID in (
+                0x2da17977, 0xc5af5d94, 0x1f4661b9, 0xd49a2697
+        ):
             # Maybe it is an user or a chat? Or their full versions?
             #
             # The hexadecimal numbers above are simply:
@@ -941,4 +944,4 @@ class TelegramClient(TelegramBareClient):
             'Make sure you have encountered this peer before.'.format(peer)
         )
 
-    # endregion
+        # endregion
