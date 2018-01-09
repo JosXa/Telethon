@@ -1,6 +1,9 @@
+
 #!/usr/bin/env python3
 import traceback
+import uuid
 
+from telethon import TelegramClient
 from telethon_examples.interactive_telegram_client \
     import InteractiveTelegramClient
 
@@ -20,6 +23,8 @@ def load_settings(path='api/settings'):
 
     return result
 
+def main(client: TelegramClient):
+    client.send_message('me', str(uuid.uuid4()))
 
 if __name__ == '__main__':
     # Load the settings and initialize the client
@@ -30,17 +35,17 @@ if __name__ == '__main__':
         host, port = settings['socks_proxy'].split(':')
         kwargs = dict(proxy=(socks.SOCKS5, host, int(port)))
 
-    client = InteractiveTelegramClient(
-        session_user_id=str(settings.get('session_name', 'anonymous')),
-        user_phone=str(settings['user_phone']),
+    client = TelegramClient(
+        session=str(settings.get('session_name', 'anonymous')),
         api_id=settings['api_id'],
         api_hash=str(settings['api_hash']),
         **kwargs)
+    client.start(settings.get('user_phone'))
 
     print('Initialization done!')
 
     try:
-        client.run()
+        main(client)
 
     except Exception as e:
         print('Unexpected error ({}): {} at\n{}'.format(

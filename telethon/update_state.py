@@ -10,7 +10,7 @@ from .tl import types as tl
 __log__ = logging.getLogger(__name__)
 
 
-class UpdateState:
+class Updater:
     """Used to hold the current state of processed updates.
        To retrieve an update, .poll() should be called.
     """
@@ -27,6 +27,7 @@ class UpdateState:
         self._workers = workers
         self._worker_threads = []
 
+        self.error_handler = None
         self.handlers = []
         self._updates_lock = RLock()
         self._updates = Queue()
@@ -95,7 +96,7 @@ class UpdateState:
 
         for i in range(self._workers):
             thread = Thread(
-                target=UpdateState._worker_loop,
+                target=Updater._worker_loop,
                 name='UpdateWorker{}'.format(i),
                 daemon=True,
                 args=(self, i)
@@ -106,15 +107,22 @@ class UpdateState:
     def _worker_loop(self, wid):
         while True:
             try:
-                update = self.poll(timeout=UpdateState.WORKER_POLL_TIMEOUT)
+                update = self.poll(timeout=Updater.WORKER_POLL_TIMEOUT)
                 # TODO Maybe people can add different handlers per update type
                 if update:
                     for handler in self.handlers:
-                        handler(update)
+                        if self.error_handler is not None:
+                            try:
+                                handler(update)
+                            except Exception as e:
+                                self.error_handler(update, e)
+                        else:
+                            handler(update)
             except StopIteration:
                 break
             except:
                 # We don't want to crash a worker thread due to any reason
+                # TODO: Maybe just make this the default error handler?
                 __log__.exception('Unhandled exception on worker %d', wid)
 
     def process(self, update):

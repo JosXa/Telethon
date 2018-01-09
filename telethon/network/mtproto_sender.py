@@ -123,7 +123,7 @@ class MtProtoSender:
         update_state.process(TLObject).
 
         :param update_state:
-            the UpdateState that will process all the received
+            the Updater that will process all the received
             Update and Updates objects.
         """
         try:
@@ -182,7 +182,7 @@ class MtProtoSender:
         :param msg_id: the ID of the message.
         :param sequence: the sequence of the message.
         :param reader: the BinaryReader that contains the message.
-        :param state: the current UpdateState.
+        :param state: the current Updater.
         :return: true if the message was handled correctly, false otherwise.
         """
         # TODO Check salt, session_id and sequence_number

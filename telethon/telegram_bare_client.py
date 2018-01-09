@@ -35,9 +35,8 @@ from .tl.functions.upload import (
 from .tl.types import InputFile, InputFileBig
 from .tl.types.auth import ExportedAuthorization
 from .tl.types.upload import FileCdnRedirect
-from .update_state import UpdateState
+from .update_state import Updater
 from .utils import get_appropriated_part_size
-
 
 DEFAULT_DC_ID = 4
 DEFAULT_IPV4_IP = '149.154.167.51'
@@ -90,7 +89,7 @@ class TelegramBareClient:
                 "Refer to telethon.rtfd.io for more information.")
 
         self._use_ipv6 = use_ipv6
-        
+
         # Determine what session object we have
         if isinstance(session, str) or session is None:
             session = Session(session)
@@ -101,7 +100,7 @@ class TelegramBareClient:
 
         # ':' in session.server_address is True if it's an IPv6 address
         if (not session.server_address or
-                (':' in session.server_address) != use_ipv6):
+                    (':' in session.server_address) != use_ipv6):
             session.set_dc(
                 DEFAULT_DC_ID,
                 DEFAULT_IPV6_IP if self._use_ipv6 else DEFAULT_IPV4_IP,
@@ -133,7 +132,7 @@ class TelegramBareClient:
 
         # This member will process updates if enabled.
         # One may change self.updates.enabled at any later point.
-        self.updates = UpdateState(workers=update_workers)
+        self.updates = Updater(workers=update_workers)
 
         # Used on connection - the user may modify these and reconnect
         kwargs['app_version'] = kwargs.get('app_version', self.__version__)
@@ -422,7 +421,7 @@ class TelegramBareClient:
            RuntimeError().
         """
         if not all(isinstance(x, TLObject) and
-                   x.content_related for x in requests):
+                           x.content_related for x in requests):
             raise TypeError('You can only invoke requests, not types!')
 
         if self._background_error:
@@ -633,7 +632,7 @@ class TelegramBareClient:
             if tuple_:
                 __log__.info('File was already cached, not uploading again')
                 return InputFile(name=file_name,
-                    md5_checksum=tuple_[0], id=tuple_[2], parts=tuple_[3])
+                                 md5_checksum=tuple_[0], id=tuple_[2], parts=tuple_[3])
         else:
             hash_md5 = None
 
@@ -775,15 +774,26 @@ class TelegramBareClient:
         """
         self.updates.process(self(GetStateRequest()))
 
-    def add_update_handler(self, handler):
-        """Adds an update handler (a function which takes a TLObject,
-          an update, as its parameter) and listens for updates"""
+    def __warn_no_update_workers(self):
         if self.updates.workers is None:
             warnings.warn(
                 "You have not setup any workers, so you won't receive updates."
                 " Pass update_workers=4 when creating the TelegramClient,"
                 " or set client.self.updates.workers = 4"
             )
+
+    def add_update_handler(self, handler):
+        """Adds an update handler (a function which takes a TLObject,
+          an update, as its parameter) and listens for updates.
+
+        Args:
+            handler (:obj:`callable`: The callback to handle updates
+        """
+        self.__warn_no_update_workers()
+
+        if not callable(handler):
+            raise ValueError("The `handler` parameter must be a callable function with one "
+                             "argument (the Update).")
 
         self.updates.handlers.append(handler)
 
@@ -792,6 +802,22 @@ class TelegramBareClient:
 
     def list_update_handlers(self):
         return self.updates.handlers[:]
+
+    def set_error_handler(self, handler):
+        """Adds an error handler (a function that takes the update and the corresponding raised
+        exception as its parameters) which is called when an unhandled exception is raised in one
+        of the update handlers.
+
+        Args:
+            handler (:obj:`callable`): The callback to handle errors
+        """
+        self.__warn_no_update_workers()
+
+        if not callable(handler):
+            raise ValueError("The `handler` parameter must be a callable function with one "
+                             "argument (the Update).")
+
+        self.updates.error_handler = handler
 
     # endregion
 
@@ -894,4 +920,4 @@ class TelegramBareClient:
 
         self._recv_thread = None
 
-    # endregion
+        # endregion
