@@ -26,7 +26,9 @@ known_codes = {
 
 def fetch_errors(output, url=URL):
     print('Opening a connection to', url, '...')
-    r = urllib.request.urlopen(url)
+    r = urllib.request.urlopen(urllib.request.Request(
+        url, headers={'User-Agent' : 'Mozilla/5.0'}
+    ))
     print('Checking response...')
     data = json.loads(
         r.read().decode(r.info().get_param('charset') or 'utf-8')
@@ -34,11 +36,11 @@ def fetch_errors(output, url=URL):
     if data.get('ok'):
         print('Response was okay, saving data')
         with open(output, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+            json.dump(data, f, sort_keys=True)
         return True
     else:
         print('The data received was not okay:')
-        print(json.dumps(data, indent=4))
+        print(json.dumps(data, indent=4, sort_keys=True))
         return False
 
 
@@ -59,20 +61,16 @@ def get_class_name(error_code):
 
 def write_error(f, code, name, desc, capture_name):
     f.write(
-        f'\n'
-        f'\n'
-        f'class {name}({get_class_name(code)}):\n'
-        f'    def __init__(self, **kwargs):\n'
-        f'        '
+        '\n\nclass {}({}):\n    def __init__(self, **kwargs):\n        '
+        ''.format(name, get_class_name(code))
     )
     if capture_name:
         f.write(
-            f"self.{capture_name} = int(kwargs.get('capture', 0))\n"
-            f"        "
+            "self.{} = int(kwargs.get('capture', 0))\n        ".format(capture_name)
         )
-    f.write(f'super(Exception, self).__init__(self, {repr(desc)}')
+    f.write('super(Exception, self).__init__({}'.format(repr(desc)))
     if capture_name:
-        f.write(f'.format(self.{capture_name})')
+        f.write('.format(self.{})'.format(capture_name))
     f.write(')\n')
 
 
@@ -83,7 +81,9 @@ def generate_code(output, json_file, errors_desc):
     errors = defaultdict(set)
     # PWRTelegram's API doesn't return all errors, which we do need here.
     # Add some special known-cases manually first.
-    errors[420].add('FLOOD_WAIT_X')
+    errors[420].update((
+        'FLOOD_WAIT_X', 'FLOOD_TEST_PHONE_WAIT_X'
+    ))
     errors[401].update((
         'AUTH_KEY_INVALID', 'SESSION_EXPIRED', 'SESSION_REVOKED'
     ))
@@ -122,6 +122,7 @@ def generate_code(output, json_file, errors_desc):
     # Names for the captures, or 'x' if unknown
     capture_names = {
         'FloodWaitError': 'seconds',
+        'FloodTestPhoneWaitError': 'seconds',
         'FileMigrateError': 'new_dc',
         'NetworkMigrateError': 'new_dc',
         'PhoneMigrateError': 'new_dc',
@@ -132,15 +133,12 @@ def generate_code(output, json_file, errors_desc):
     # Everything ready, generate the code
     with open(output, 'w', encoding='utf-8') as f:
         f.write(
-            f'from .rpc_base_errors import RPCError, BadMessageError, '
-            f'{", ".join(known_base_classes.values())}\n'
+            'from .rpc_base_errors import RPCError, BadMessageError, {}\n'.format(
+                ", ".join(known_base_classes.values()))
         )
         for code, cls in needed_base_classes:
             f.write(
-                f'\n'
-                f'\n'
-                f'class {cls}(RPCError):\n'
-                f'    code = {code}\n'
+                '\n\nclass {}(RPCError):\n    code = {}\n'.format(cls, code)
             )
 
         patterns = []  # Save this dictionary later in the generated code
@@ -161,10 +159,18 @@ def generate_code(output, json_file, errors_desc):
                 patterns.append((pattern, name))
                 capture = capture_names.get(name, 'x') if has_captures else None
                 # TODO Some errors have the same name but different code,
-                # split this accross different files?
+                # split this across different files?
                 write_error(f, error_code, name, description, capture)
 
         f.write('\n\nrpc_errors_all = {\n')
         for pattern, name in patterns:
-            f.write(f'    {repr(pattern)}: {name},\n')
+            f.write('    {}: {},\n'.format(repr(pattern), name))
         f.write('}\n')
+
+
+if __name__ == '__main__':
+    if input('generate (y/n)?: ').lower() == 'y':
+        generate_code('../telethon/errors/rpc_error_list.py',
+                      'errors.json', 'error_descriptions')
+    elif input('fetch (y/n)?: ').lower() == 'y':
+        fetch_errors('errors.json')

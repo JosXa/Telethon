@@ -15,15 +15,10 @@ Extra supported commands are:
 from codecs import open
 from sys import argv
 import os
+import re
 
 # Always prefer setuptools over distutils
 from setuptools import find_packages, setup
-
-try:
-    from telethon import TelegramClient
-except Exception as e:
-    print('Failed to import TelegramClient due to', e)
-    TelegramClient = None
 
 
 class TempWorkDir:
@@ -50,11 +45,13 @@ GENERATOR_DIR = 'telethon/tl'
 IMPORT_DEPTH = 2
 
 
-def gen_tl():
+def gen_tl(force=True):
     from telethon_generator.tl_generator import TLGenerator
     from telethon_generator.error_generator import generate_code
     generator = TLGenerator(GENERATOR_DIR)
     if generator.tlobjects_exist():
+        if not force:
+            return
         print('Detected previous TLObjects. Cleaning...')
         generator.clean_tlobjects()
 
@@ -76,6 +73,16 @@ def main():
         print('Done.')
 
     elif len(argv) >= 2 and argv[1] == 'pypi':
+        # (Re)generate the code to make sure we don't push without it
+        gen_tl()
+
+        # Try importing the telethon module to assert it has no errors
+        try:
+            import telethon
+        except:
+            print('Packaging for PyPi aborted, importing the module failed.')
+            return
+
         # Need python3.5 or higher, but Telethon is supposed to support 3.x
         # Place it here since noone should be running ./setup.py pypi anyway
         from subprocess import run
@@ -89,26 +96,24 @@ def main():
         for x in ('build', 'dist', 'Telethon.egg-info'):
             rmtree(x, ignore_errors=True)
 
-    if len(argv) >= 2 and argv[1] == 'fetch_errors':
+    elif len(argv) >= 2 and argv[1] == 'fetch_errors':
         from telethon_generator.error_generator import fetch_errors
         fetch_errors(ERRORS_JSON)
 
     else:
-        if not TelegramClient:
-            gen_tl()
-            from telethon import TelegramClient as TgClient
-            version = TgClient.__version__
-        else:
-            version = TelegramClient.__version__
+        # Call gen_tl() if the scheme.tl file exists, e.g. install from GitHub
+        if os.path.isfile(SCHEME_TL):
+            gen_tl(force=False)
 
         # Get the long description from the README file
         with open('README.rst', encoding='utf-8') as f:
             long_description = f.read()
 
+        with open('telethon/version.py', encoding='utf-8') as f:
+            version = re.search(r"^__version__\s+=\s+'(.*)'$",
+                                f.read(), flags=re.MULTILINE).group(1)
         setup(
             name='Telethon',
-
-            # Versions should comply with PEP440.
             version=version,
             description="Full-featured Telegram client library for Python 3",
             long_description=long_description,
@@ -144,7 +149,10 @@ def main():
                 'telethon_generator', 'telethon_tests', 'run_tests.py',
                 'try_telethon.py'
             ]),
-            install_requires=['pyaes', 'rsa']
+            install_requires=['pyaes', 'rsa'],
+            extras_require={
+                'cryptg': ['cryptg']
+            }
         )
 
 

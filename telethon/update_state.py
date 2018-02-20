@@ -1,10 +1,13 @@
 import logging
 import pickle
 from collections import deque
+from queue import Queue, Empty
 from datetime import datetime
-from threading import RLock, Event, Thread
+from threading import RLock, Thread
 
 from .tl import types as tl
+
+__log__ = logging.getLogger(__name__)
 
 
 class UpdateState:
@@ -19,41 +22,31 @@ class UpdateState:
           workers is None: Updates will *not* be stored on self.
           workers = 0: Another thread is responsible for calling self.poll()
           workers > 0: 'workers' background threads will be spawned, any
-                       any of them will invoke all the self.handlers.
+                       any of them will invoke the self.handler.
         """
         self._workers = workers
         self._worker_threads = []
 
-        self.handlers = []
+        self.handler = None
         self._updates_lock = RLock()
-        self._updates_available = Event()
-        self._updates = deque()
-        self._latest_updates = deque(maxlen=10)
-
-        self._logger = logging.getLogger(__name__)
+        self._updates = Queue()
 
         # https://core.telegram.org/api/updates
         self._state = tl.updates.State(0, 0, datetime.now(), 0, 0)
 
     def can_poll(self):
         """Returns True if a call to .poll() won't lock"""
-        return self._updates_available.is_set()
+        return not self._updates.empty()
 
     def poll(self, timeout=None):
         """Polls an update or blocks until an update object is available.
            If 'timeout is not None', it should be a floating point value,
            and the method will 'return None' if waiting times out.
         """
-        if not self._updates_available.wait(timeout=timeout):
+        try:
+            update = self._updates.get(timeout=timeout)
+        except Empty:
             return
-
-        with self._updates_lock:
-            if not self._updates_available.is_set():
-                return
-
-            update = self._updates.popleft()
-            if not self._updates:
-                self._updates_available.clear()
 
         if isinstance(update, Exception):
             raise update  # Some error was set through (surely StopIteration)
@@ -70,7 +63,8 @@ class UpdateState:
         self.stop_workers()
         self._workers = n
         if n is None:
-            self._updates.clear()
+            while self._updates:
+                self._updates.get()
         else:
             self.setup_workers()
 
@@ -86,8 +80,7 @@ class UpdateState:
                 # on all the worker threads
                 # TODO Should this reset the pts and such?
                 for _ in range(self._workers):
-                    self._updates.appendleft(StopIteration())
-                self._updates_available.set()
+                    self._updates.put(StopIteration())
 
         for t in self._worker_threads:
             t.join()
@@ -113,17 +106,13 @@ class UpdateState:
         while True:
             try:
                 update = self.poll(timeout=UpdateState.WORKER_POLL_TIMEOUT)
-                # TODO Maybe people can add different handlers per update type
-                if update:
-                    for handler in self.handlers:
-                        handler(update)
+                if update and self.handler:
+                    self.handler(update)
             except StopIteration:
                 break
-            except Exception as e:
+            except:
                 # We don't want to crash a worker thread due to any reason
-                self._logger.debug(
-                    '[ERROR] Unhandled exception on worker {}'.format(wid), e
-                )
+                __log__.exception('Unhandled exception on worker %d', wid)
 
     def process(self, update):
         """Processes an update object. This method is normally called by
@@ -134,56 +123,24 @@ class UpdateState:
 
         with self._updates_lock:
             if isinstance(update, tl.updates.State):
+                __log__.debug('Saved new updates state')
                 self._state = update
                 return  # Nothing else to be done
 
-            pts = getattr(update, 'pts', self._state.pts)
-            if hasattr(update, 'pts') and pts <= self._state.pts:
-                return  # We already handled this update
+            if hasattr(update, 'pts'):
+                self._state.pts = update.pts
 
-            self._state.pts = pts
-
-            # TODO There must be a better way to handle updates rather than
-            # keeping a queue with the latest updates only, and handling
-            # the 'pts' correctly should be enough. However some updates
-            # like UpdateUserStatus (even inside UpdateShort) will be called
-            # repeatedly very often if invoking anything inside an update
-            # handler. TODO Figure out why.
-            """
-            client = TelegramClient('anon', api_id, api_hash, update_workers=1)
-            client.connect()
-            def handle(u):
-                client.get_me()
-            client.add_update_handler(handle)
-            input('Enter to exit.')
-            """
-            data = pickle.dumps(update.to_dict())
-            if data in self._latest_updates:
-                return  # Duplicated too
-
-            self._latest_updates.append(data)
-
-            if type(update).SUBCLASS_OF_ID == 0x8af52aac:  # crc32(b'Updates')
-                # Expand "Updates" into "Update", and pass these to callbacks.
-                # Since .users and .chats have already been processed, we
-                # don't need to care about those either.
-                if isinstance(update, tl.UpdateShort):
-                    self._updates.append(update.update)
-                    self._updates_available.set()
-
-                elif isinstance(update, (tl.Updates, tl.UpdatesCombined)):
-                    self._updates.extend(update.updates)
-                    self._updates_available.set()
-
-                elif not isinstance(update, tl.UpdatesTooLong):
-                    # TODO Handle "Updates too long"
-                    self._updates.append(update)
-                    self._updates_available.set()
-
-            elif type(update).SUBCLASS_OF_ID == 0x9f89304e:  # crc32(b'Update')
-                self._updates.append(update)
-                self._updates_available.set()
+            # After running the script for over an hour and receiving over
+            # 1000 updates, the only duplicates received were users going
+            # online or offline. We can trust the server until new reports.
+            if isinstance(update, tl.UpdateShort):
+                self._updates.put(update.update)
+            # Expand "Updates" into "Update", and pass these to callbacks.
+            # Since .users and .chats have already been processed, we
+            # don't need to care about those either.
+            elif isinstance(update, (tl.Updates, tl.UpdatesCombined)):
+                for u in update.updates:
+                    self._updates.put(u)
+            # TODO Handle "tl.UpdatesTooLong"
             else:
-                self._logger.debug('Ignoring "update" of type {}'.format(
-                    type(update).__name__)
-                )
+                self._updates.put(update)
