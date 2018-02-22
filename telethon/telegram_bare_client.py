@@ -122,9 +122,14 @@ class TelegramBareClient:
         # expensive operation.
         self._exported_sessions = {}
 
+        # Continue with processing of the updates from where the bot last
+        # terminated.
+        last_update_state = self.session.get_update_state()
         # This member will process updates if enabled.
         # One may change self.updates.enabled at any later point.
-        self.updates = UpdateState(workers=update_workers)
+        self.updates = UpdateState(
+            workers=update_workers,
+            initial_state=last_update_state)
 
         # Used on connection - the user may modify these and reconnect
         kwargs['app_version'] = kwargs.get('app_version', self.__version__)
@@ -598,14 +603,14 @@ class TelegramBareClient:
     def catch_up(self):
         """Retrieves updates in the queue through consecutive calls to
         ``getDifference``."""  # TODO: better doc
-        state = self.updates.state
 
+        state = self.updates.state
         while True:
+            __log__.info("Getting difference...")
             difference = self(GetDifferenceRequest(
                 pts=state.pts,
                 date=state.date,
                 qts=state.qts,
-                pts_total_limit=None
             ))
             if isinstance(difference, DifferenceEmpty):
                 break  # Nothing to do
@@ -614,23 +619,17 @@ class TelegramBareClient:
                              "to be processed.")
                 break
             elif isinstance(difference, Difference):
-                self.updates.process_difference(difference)
+                self.updates.put_difference(difference)
                 break  # Full difference processed as indicated by type
             elif isinstance(difference, DifferenceSlice):
                 # Partial difference
-                self.updates.process_difference(difference)
-                # TODO: save the state here in any case?
-                intermediate_state = difference.intermediate_state
-                self.updates.process(intermediate_state)
+                self.updates.put_difference(difference)
+                if difference.intermediate_state:
+                    self.session.save_update_state(
+                        difference.intermediate_state)
+                    continue
             else:
-                __log__.warning("GetDifferenceRequest returned " +
-                                ("None" if difference is None else
-                                    "an unknown type {}".format(
-                                        type(difference)
-                                    )))
-
-
-        # DifferenceEmpty, Difference, DifferenceSlice, DifferenceTooLong.
+                break
 
     # endregion
 

@@ -192,7 +192,8 @@ class Connection:
                           'reading data left:', packet_len)
             while True:
                 try:
-                    __log__.error(repr(self.read(1)))
+                    # __log__.error(repr(self.read(1)))
+                    pass
                 except TimeoutError:
                     break
             # Connection reset and hope it's fixed after

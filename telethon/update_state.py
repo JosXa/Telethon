@@ -1,6 +1,7 @@
 import logging
 import pickle
 from collections import deque
+from pprint import pprint
 from queue import Queue, Empty
 from datetime import datetime
 from threading import RLock, Thread
@@ -36,6 +37,12 @@ class UpdateState:
 
         self.handler = None
         self._updates_lock = RLock()
+
+        # The difference queue of unprocessed updates to the current state
+        # Items in this queue take precedence over ones in _updates while
+        # processing.
+        self._difference_updates = Queue()
+        # The queue for incoming updates
         self._updates = Queue()
 
         # https://core.telegram.org/api/updates
@@ -50,17 +57,28 @@ class UpdateState:
 
     def can_poll(self):
         """Returns True if a call to .poll() won't lock"""
-        return not self._updates.empty()
+        return self._updates.not_empty or self._difference_updates.not_empty
 
     def poll(self, timeout=None):
         """Polls an update or blocks until an update object is available.
            If 'timeout is not None', it should be a floating point value,
            and the method will 'return None' if waiting times out.
         """
-        try:
-            update = self._updates.get(timeout=timeout)
-        except Empty:
-            return
+        update = None
+
+        # First see if there are unprocessed catch_up differences available
+        if self._difference_updates.not_empty:
+            try:
+                update = self._difference_updates.get(block=False)
+            except Empty:
+                pass  # Could possibly happen in a threaded environment
+
+        if not update:
+            # Pick a new update from the queue
+            try:
+                update = self._updates.get(timeout=timeout)
+            except Empty:
+                return
 
         if isinstance(update, Exception):
             raise update  # Some error was set through (surely StopIteration)
@@ -79,6 +97,9 @@ class UpdateState:
         if n is None:
             while self._updates:
                 self._updates.get()
+            while self._difference_updates:
+                __log__.info("Picking from DIFFERENCE QUEUE")
+                self._difference_updates.get()
         else:
             self.setup_workers()
 
@@ -93,6 +114,7 @@ class UpdateState:
                 # Insert at the beginning so the very next poll causes an error
                 # on all the worker threads
                 for _ in range(self._workers):
+                    self._difference_updates.put(StopIteration())
                     self._updates.put(StopIteration())
 
         for t in self._worker_threads:
@@ -127,17 +149,26 @@ class UpdateState:
                 # We don't want to crash a worker thread due to any reason
                 __log__.exception('Unhandled exception on worker %d', wid)
 
-    def process_difference(self, difference):
+    def put_difference(self, difference):
         """Processes the difference returned by a GetDifferenceRequest"""
-
-        # Merge retrieved lists of updates and sort it chronologically
-        new_updates = difference.new_messages + \
-                      difference.new_encrypted_messages + \
-                      difference.other_updates
-        new_updates.sort(key=lambda ud: ud.id)
+        new_updates = (difference.new_messages or []) + \
+                      (difference.new_encrypted_messages or []) + \
+                      (difference.other_updates or [])
+        # invalid = [x for x in new_updates if not hasattr(x, 'id')]
+        # types_printed = list()
+        # for i in invalid:
+        #     if type(i) not in types_printed:
+        #         pprint(i.to_dict())
+        #         types_printed.append(type(i))
+        # TODO: nasty hack
+        new_updates.sort(key=lambda ud: ud.id if hasattr(ud, 'id') else -1)
 
         # Put the received updates in the queue
-        self._updates.
+        for u in new_updates:
+            self._difference_updates.put_nowait(u)
+
+        if difference.intermediate_state:
+            self._state = difference.intermediate_state
 
 
     def process(self, update):

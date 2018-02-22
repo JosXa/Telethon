@@ -155,14 +155,13 @@ class Session:
                     hash integer,
                     primary key(md5_digest, file_size, type)
                 )"""
-                ,
+                ,  # primary key is irrelevant
                 """update_state (
                     pts integer,
                     qts integer,
                     date datetime,
-                    seq integer,
-                    unread_count integer,
-                    primary key(md5_digest, file_size, type)
+                    seq integer primary key,
+                    unread_count integer
                 )"""
             )
             c.execute("insert into version values (?)", (CURRENT_VERSION,))
