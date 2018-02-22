@@ -6,6 +6,8 @@ from signal import signal, SIGINT, SIGTERM, SIGABRT
 from threading import Lock
 from time import sleep
 
+from telethon.tl.types.updates import DifferenceEmpty, Difference, DifferenceSlice, DifferenceTooLong
+
 from . import version, utils
 from .crypto import rsa
 from .errors import (
@@ -26,7 +28,7 @@ from .tl.functions.auth import (
 from .tl.functions.help import (
     GetCdnConfigRequest, GetConfigRequest
 )
-from .tl.functions.updates import GetStateRequest
+from .tl.functions.updates import GetStateRequest, GetDifferenceRequest
 from .tl.types.auth import ExportedAuthorization
 from .update_state import UpdateState
 
@@ -81,7 +83,7 @@ class TelegramBareClient:
                 "Refer to telethon.rtfd.io for more information.")
 
         self._use_ipv6 = use_ipv6
-        
+
         # Determine what session object we have
         if isinstance(session, str) or session is None:
             session = Session(session)
@@ -195,7 +197,7 @@ class TelegramBareClient:
 
         try:
             self._sender.connect()
-            __log__.info('Connection success!')
+            __log__.info('Connection established successfully!')
 
             # Connection was successful! Try syncing the update state
             # UNLESS '_sync_updates' is False (we probably are in
@@ -250,6 +252,9 @@ class TelegramBareClient:
 
         __log__.debug('Stopping all workers...')
         self.updates.stop_workers()
+
+        __log__.debug('Saving update state...')
+        self.session.save_update_state(self.updates)
 
         # This will trigger a "ConnectionResetError" on the recv_thread,
         # which won't attempt reconnecting as ._user_connected is False.
@@ -590,6 +595,43 @@ class TelegramBareClient:
         self.updates.process(self(GetStateRequest()))
         self._last_state = datetime.now()
 
+    def catch_up(self):
+        """Retrieves updates in the queue through consecutive calls to
+        ``getDifference``."""  # TODO: better doc
+        state = self.updates.state
+
+        while True:
+            difference = self(GetDifferenceRequest(
+                pts=state.pts,
+                date=state.date,
+                qts=state.qts,
+                pts_total_limit=None
+            ))
+            if isinstance(difference, DifferenceEmpty):
+                break  # Nothing to do
+            elif isinstance(difference, DifferenceTooLong):
+                __log__.info("Update difference to current state is too long "
+                             "to be processed.")
+                break
+            elif isinstance(difference, Difference):
+                self.updates.process_difference(difference)
+                break  # Full difference processed as indicated by type
+            elif isinstance(difference, DifferenceSlice):
+                # Partial difference
+                self.updates.process_difference(difference)
+                # TODO: save the state here in any case?
+                intermediate_state = difference.intermediate_state
+                self.updates.process(intermediate_state)
+            else:
+                __log__.warning("GetDifferenceRequest returned " +
+                                ("None" if difference is None else
+                                    "an unknown type {}".format(
+                                        type(difference)
+                                    )))
+
+
+        # DifferenceEmpty, Difference, DifferenceSlice, DifferenceTooLong.
+
     # endregion
 
     # region Constant read
@@ -610,7 +652,7 @@ class TelegramBareClient:
         else:
             os._exit(1)
 
-    def idle(self, stop_signals=(SIGINT, SIGTERM, SIGABRT)):
+    def idle(self, stop_signals=(SIGINT, SIGTERM, SIGABRT), catch_up=True):
         """
         Idles the program by looping forever and listening for updates
         until one of the signals are received, which breaks the loop.
@@ -624,6 +666,11 @@ class TelegramBareClient:
         """
         if self._spawn_read_thread and not self._on_read_thread():
             raise RuntimeError('Can only idle if spawn_read_thread=False')
+
+        if catch_up:
+            # This is a blocking call that processes any updates pushed to the
+            # queue while the bot was offline.
+            self.catch_up()
 
         self._idling.set()
         for sig in stop_signals:

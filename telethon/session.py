@@ -9,6 +9,10 @@ from enum import Enum
 from os.path import isfile as file_exists
 from threading import Lock, RLock
 
+from telethon.tl import types as tl
+from datetime import datetime
+
+from telethon.update_state import UpdateState
 from . import utils
 from .crypto import AuthKey
 from .tl import TLObject
@@ -124,7 +128,7 @@ class Session:
             c.close()
         else:
             # Tables don't exist, create new ones
-            self._create_table(
+            self._create_tables(
                 c,
                 "version (version integer primary key)"
                 ,
@@ -149,6 +153,15 @@ class Session:
                     type integer,
                     id integer,
                     hash integer,
+                    primary key(md5_digest, file_size, type)
+                )"""
+                ,
+                """update_state (
+                    pts integer,
+                    qts integer,
+                    date datetime,
+                    seq integer,
+                    unread_count integer,
                     primary key(md5_digest, file_size, type)
                 )"""
             )
@@ -192,7 +205,7 @@ class Session:
         if old == 2:
             # Old cache from old sent_files lasts then a day anyway, drop
             c.execute('drop table sent_files')
-        self._create_table(c, """sent_files (
+        self._create_tables(c, """sent_files (
             md5_digest blob,
             file_size integer,
             type integer,
@@ -203,7 +216,7 @@ class Session:
         c.close()
 
     @staticmethod
-    def _create_table(c, *definitions):
+    def _create_tables(c, *definitions):
         """
         Creates a table given its definition 'name (columns).
         If the sqlite version is >= 3.8.2, it will use "without rowid".
@@ -307,7 +320,7 @@ class Session:
                 for f in os.listdir('.') if f.endswith(EXTENSION)]
 
     def generate_sequence(self, content_related):
-        """Thread safe method to generates the next sequence number,
+        """Thread safe method to generate the next sequence number,
            based on whether it was confirmed yet or not.
 
            Note that if confirmed=True, the sequence number
@@ -343,6 +356,43 @@ class Session:
         now = int(time.time())
         correct = correct_msg_id >> 32
         self.time_offset = correct - now
+
+    def save_update_state(self, update_state):
+        """Stores the `UpdateState` instance"""
+        if isinstance(update_state, UpdateState):
+            state = update_state.state
+        elif isinstance(update_state, tl.updates.State):
+            state = update_state
+        else:
+            raise ValueError("Argument `update_state` does not contain a "
+                             "valid State.")
+        with self._db_lock:
+            c = self._cursor()
+            # While we can save multiple rows into the sessions table
+            # currently we only want to keep ONE as the tables don't
+            # tell us which auth_key's are usable and will work. Needs
+            # some more work before being able to save auth_key's for
+            # multiple DCs. Probably done differently.
+            c.execute('delete from update_state')
+            c.execute('insert or replace into update_state values (?,?,?,?,?)', (
+                state.pts,
+                state.qts,
+                state.date,
+                state.seq,
+                state.unread_count
+            ))
+            c.close()
+
+    def get_update_state(self):
+        """Retrieves the update state"""
+        c = self._cursor()
+        c.execute('select * from update_state')
+        result = c.fetchone()
+        if result:
+            # Unpack result tuple implicitly, assuming values and parameters
+            # are ordered in the right way
+            return tl.updates.State(*result)
+        return None
 
     # Entity processing
 

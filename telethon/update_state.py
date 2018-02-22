@@ -5,6 +5,8 @@ from queue import Queue, Empty
 from datetime import datetime
 from threading import RLock, Thread
 
+from telethon.tl.types.updates import DifferenceSlice
+
 from .tl import types as tl
 
 __log__ = logging.getLogger(__name__)
@@ -16,13 +18,18 @@ class UpdateState:
     """
     WORKER_POLL_TIMEOUT = 5.0  # Avoid waiting forever on the workers
 
-    def __init__(self, workers=None):
+    def __init__(self, workers=None, initial_state=None):
         """
-        :param workers: This integer parameter has three possible cases:
-          workers is None: Updates will *not* be stored on self.
-          workers = 0: Another thread is responsible for calling self.poll()
-          workers > 0: 'workers' background threads will be spawned, any
-                       any of them will invoke the self.handler.
+        Performs ``get_updates`` requests and reflects the current state of
+        updates in the API.
+
+        Args:
+            workers (:obj:`int`): Three possible cases:
+                workers is None: Updates will *not* be stored on self.
+                workers = 0:     Another thread is responsible for calling
+                                 self.poll()
+                workers > 0:     'workers' background threads will be spawned,
+                                 any of them will invoke the ``self.handler``.
         """
         self._workers = workers
         self._worker_threads = []
@@ -32,7 +39,14 @@ class UpdateState:
         self._updates = Queue()
 
         # https://core.telegram.org/api/updates
-        self._state = tl.updates.State(0, 0, datetime.now(), 0, 0)
+        if initial_state is None:
+            self._state = tl.updates.State(0, 0, datetime.now(), 0, 0)
+        else:
+            self._state = initial_state
+
+    @property
+    def state(self):
+        return self._state
 
     def can_poll(self):
         """Returns True if a call to .poll() won't lock"""
@@ -78,7 +92,6 @@ class UpdateState:
             with self._updates_lock:
                 # Insert at the beginning so the very next poll causes an error
                 # on all the worker threads
-                # TODO Should this reset the pts and such?
                 for _ in range(self._workers):
                     self._updates.put(StopIteration())
 
@@ -114,6 +127,19 @@ class UpdateState:
                 # We don't want to crash a worker thread due to any reason
                 __log__.exception('Unhandled exception on worker %d', wid)
 
+    def process_difference(self, difference):
+        """Processes the difference returned by a GetDifferenceRequest"""
+
+        # Merge retrieved lists of updates and sort it chronologically
+        new_updates = difference.new_messages + \
+                      difference.new_encrypted_messages + \
+                      difference.other_updates
+        new_updates.sort(key=lambda ud: ud.id)
+
+        # Put the received updates in the queue
+        self._updates.
+
+
     def process(self, update):
         """Processes an update object. This method is normally called by
            the library itself.
@@ -123,8 +149,8 @@ class UpdateState:
 
         with self._updates_lock:
             if isinstance(update, tl.updates.State):
-                __log__.debug('Saved new updates state')
                 self._state = update
+                __log__.debug('Saved new updates state')
                 return  # Nothing else to be done
 
             if hasattr(update, 'pts'):
