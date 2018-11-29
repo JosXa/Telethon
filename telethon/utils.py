@@ -13,6 +13,7 @@ import struct
 from mimetypes import guess_extension
 from types import GeneratorType
 
+from telethon.tl.types import InputBotInlineMessageID
 from .extensions import markdown, html
 from .helpers import add_surrogate, del_surrogate
 from .tl import types
@@ -445,6 +446,11 @@ def get_message_id(message):
             return message.id
     except AttributeError:
         pass
+
+    # TODO: something like this should be added
+	# if isinstance(message, InputBotInlineMessageID):
+    #     print(message.id)
+    #     return message.id
 
     raise TypeError('Invalid message type: {}'.format(type(message)))
 

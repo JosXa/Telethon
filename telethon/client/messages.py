@@ -4,6 +4,9 @@ import logging
 import time
 
 from async_generator import async_generator, yield_
+from telegram import InputMedia
+
+from telethon.tl.types import InputBotInlineMessageID
 
 from .messageparse import MessageParseMethods
 from .uploads import UploadMethods
@@ -668,17 +671,39 @@ class MessageMethods(UploadMethods, ButtonMethods, MessageParseMethods):
 
         entity = await self.get_input_entity(entity)
         text, msg_entities = await self._parse_message_text(text, parse_mode)
-        file_handle, media = await self._file_to_media(file)
-        request = functions.messages.EditMessageRequest(
-            peer=entity,
-            id=utils.get_message_id(message),
-            message=text,
-            no_webpage=not link_preview,
-            entities=msg_entities,
-            media=media,
-            reply_markup=self.build_reply_markup(buttons)
-        )
-        msg = self._get_response_message(request, await self(request), entity)
+
+        # TODO: Figure out what type the callback query event's edit() function
+		# actually expects in terms of input media...
+        if isinstance(file, types.InputMediaDocument):
+            file_handle, media = None, file
+        else:
+            file_handle, media = await self._file_to_media(file)
+
+        if isinstance(message, InputBotInlineMessageID):
+            request = functions.messages.EditInlineBotMessageRequest(
+                id=message,
+                message=text,
+                no_webpage=not link_preview,
+                entities=msg_entities,
+                media=media,
+                reply_markup=self.build_reply_markup(buttons, inline_only=True)
+            )
+        else:
+            request = functions.messages.EditMessageRequest(
+                peer=entity,
+                id=utils.get_message_id(message),
+                message=text,
+                no_webpage=not link_preview,
+                entities=msg_entities,
+                media=media,
+                reply_markup=self.build_reply_markup(buttons)
+            )
+        response = await self(request)
+
+        if isinstance(response, bool):  # when a bot edits a message
+            return response  # TODO: actually return the edited message (from cache?)
+
+        msg = self._get_response_message(request, response, entity)
         await self._cache_media(msg, file, file_handle)
         return msg
 

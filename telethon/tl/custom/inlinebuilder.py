@@ -200,6 +200,7 @@ class InlineBuilder:
             type=type,
             document=fh,
             send_message=await self._message(
+                is_article='document',
                 text=text, parse_mode=parse_mode, link_preview=link_preview,
                 geo=geo, period=period,
                 contact=contact,
@@ -247,13 +248,14 @@ class InlineBuilder:
             text=None, parse_mode=(), link_preview=True,
             geo=None, period=60, contact=None, game=False, buttons=None
     ):
-        args = (text, geo, contact, game)
-        if sum(1 for x in args if x) != 1:
-            raise ValueError(
-                'Must set exactly one of text, geo, contact or game (set {})'
-                .format(', '.join(x[0] for x in zip(
-                    'text geo contact game'.split(), args) if x[1]) or 'none')
-            )
+		# TODO: this is not correct
+        # args = (text, geo, contact, game)
+        # if sum(1 for x in args if x) != 1:
+        #     raise ValueError(
+        #         'Must set exactly one of text, geo, contact or game (set {})'
+        #         .format(', '.join(x[0] for x in zip(
+        #             'text geo contact game'.split(), args) if x[1]) or 'none')
+        #     )
 
         markup = self._client.build_reply_markup(buttons, inline_only=True)
         if text:
@@ -301,4 +303,9 @@ class InlineBuilder:
                 reply_markup=markup
             )
         else:
-            raise ValueError('No text, game or valid geo or contact given')
+            # When sending plain media without text or caption (e.g. stickers)
+            return types.InputBotInlineMessageMediaAuto(
+                message='',
+                entities=None,
+                reply_markup=markup
+            )

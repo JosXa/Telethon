@@ -237,6 +237,7 @@ class CallbackQuery(EventBuilder):
             This method also creates a task to `answer` the callback.
             """
             self._client.loop.create_task(self.answer())
+            # TODO: get_input_chat sometimes fails for bots (cannot cast NoneType to InputPeer)
             return await self._client.edit_message(
                 await self.get_input_chat(), self.query.msg_id,
                 *args, **kwargs
